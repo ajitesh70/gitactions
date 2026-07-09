@@ -1,0 +1,13 @@
+.git
+.github
+target
+*.iml
+.idea
+.vscode
+.settings
+.classpath
+.project
+README.md
+Dockerfile
+docker-compose.yml
+nginx

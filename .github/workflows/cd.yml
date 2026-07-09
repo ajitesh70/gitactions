@@ -6,24 +6,59 @@ on:
     types:
       - completed
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # Only deploy after a CI run triggered by a push to main succeeded
+    # (CI also runs on pull_request; that must never trigger a deploy).
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
     runs-on: self-hosted
+    env:
+      IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
 
     steps:
-      - name: Checkout only docker-compose.yml
+      - name: Checkout deployment files
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           sparse-checkout: |
             docker-compose.yml
+            nginx
           sparse-checkout-cone-mode: false
 
-      - name: Pull Latest Image
+      - name: Record currently running image tag (for rollback)
+        id: previous
+        run: |
+          prev_tag=$(docker inspect --format='{{.Config.Image}}' spring-demo 2>/dev/null | awk -F: '{print $NF}')
+          echo "tag=${prev_tag:-latest}" >> "$GITHUB_OUTPUT"
+
+      - name: Pull new image
         run: docker compose pull
 
-      - name: Remove Old Container
-        run: docker rm -f spring-demo || true
+      - name: Deploy
+        run: docker compose up -d --remove-orphans
 
-      - name: Deploy Container
-        run: docker compose up -d
+      - name: Wait for healthy status
+        id: healthcheck
+        continue-on-error: true
+        run: |
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' spring-demo 2>/dev/null || echo "starting")
+            if [ "$status" = "healthy" ]; then
+              echo "Deployment healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Deployment did not become healthy in time" >&2
+          docker logs spring-demo --tail 50
+          exit 1
+
+      - name: Roll back on failed health check
+        if: steps.healthcheck.outcome == 'failure'
+        run: |
+          echo "Rolling back to previous image tag: ${{ steps.previous.outputs.tag }}"
+          IMAGE_TAG=${{ steps.previous.outputs.tag }} docker compose up -d --remove-orphans
+          exit 1

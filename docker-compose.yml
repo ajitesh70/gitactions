@@ -1,11 +1,38 @@
-version: "3.9"
-
 services:
   app:
-    image: ajitesh70/spring-demo:latest
+    image: ajitesh70/spring-demo:${IMAGE_TAG:-latest}
     container_name: spring-demo
-
-    ports:
-      - "8080:8080"
-
     restart: unless-stopped
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health/readiness"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  nginx:
+    build: ./nginx
+    container_name: spring-demo-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      app:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
