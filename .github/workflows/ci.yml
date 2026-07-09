@@ -194,7 +194,12 @@ jobs:
     name: DAST (OWASP ZAP)
     needs: build
     runs-on: ubuntu-latest
+    env:
+      IMAGE_TAG: ${{ github.sha }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Download image artifact
         uses: actions/download-artifact@v8
         with:
@@ -203,31 +208,33 @@ jobs:
       - name: Load image
         run: docker load -i image.tar
 
-      - name: Run container under test
-        run: docker run -d --name spring-demo-dast -p 8080:8080 ${{ env.IMAGE_NAME }}:${{ github.sha }}
+      # Scan through nginx (the actual public-facing path), not the bare
+      # app port, so the security headers nginx adds are what gets tested.
+      - name: Start app + nginx
+        run: docker compose up -d
 
       - name: Wait for readiness
         run: |
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:8080/actuator/health/readiness; then
+            if curl -sf http://localhost/actuator/health/readiness; then
               exit 0
             fi
             sleep 2
           done
-          echo "App did not become ready in time" >&2
-          docker logs spring-demo-dast
+          echo "Stack did not become ready in time" >&2
+          docker compose logs
           exit 1
 
       - name: ZAP baseline scan
         uses: zaproxy/action-baseline@v0.15.0
         with:
-          target: "http://localhost:8080"
+          target: "http://localhost"
           fail_action: true
           allow_issue_writing: false
 
-      - name: Stop container
+      - name: Stop stack
         if: always()
-        run: docker rm -f spring-demo-dast || true
+        run: docker compose down -v
 
   push:
     name: Push Image to Docker Hub
