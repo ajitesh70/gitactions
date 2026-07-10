@@ -8,10 +8,14 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 env:
   RELEASE_NAME: spring-demo
   NAMESPACE: default
+  AWS_REGION: us-east-1
+  EKS_CLUSTER: spring-demo
+  AWS_ROLE_ARN: arn:aws:iam::708325791586:role/github-actions-spring-demo-deploy
 
 jobs:
   deploy:
@@ -30,6 +34,15 @@ jobs:
           sparse-checkout: |
             helm/spring-demo
           sparse-checkout-cone-mode: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Point kubectl/helm at the EKS cluster
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER" --region "$AWS_REGION"
 
       - name: Deploy with Helm
         # --atomic rolls the release back to the last successful revision
