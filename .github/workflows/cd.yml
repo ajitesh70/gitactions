@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  RELEASE_NAME: spring-demo
+  NAMESPACE: default
+
 jobs:
   deploy:
     # Only deploy after a CI run triggered by a push to main succeeded
@@ -19,46 +23,25 @@ jobs:
       IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
 
     steps:
-      - name: Checkout deployment files
+      - name: Checkout Helm chart
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           sparse-checkout: |
-            docker-compose.yml
-            nginx
+            helm/spring-demo
           sparse-checkout-cone-mode: false
 
-      - name: Record currently running image tag (for rollback)
-        id: previous
+      - name: Deploy with Helm
+        # --atomic rolls the release back to the last successful revision
+        # automatically if the upgrade doesn't become ready in time.
         run: |
-          prev_tag=$(docker inspect --format='{{.Config.Image}}' spring-demo 2>/dev/null | awk -F: '{print $NF}')
-          echo "tag=${prev_tag:-latest}" >> "$GITHUB_OUTPUT"
+          helm upgrade --install "$RELEASE_NAME" ./helm/spring-demo \
+            --namespace "$NAMESPACE" --create-namespace \
+            --set app.image.tag="$IMAGE_TAG" \
+            --atomic --wait --timeout 5m
 
-      - name: Pull new image
-        run: docker compose pull
-
-      - name: Deploy
-        run: docker compose up -d --remove-orphans
-
-      - name: Wait for healthy status
-        id: healthcheck
-        continue-on-error: true
+      - name: Show pod status and logs on failure
+        if: failure()
         run: |
-          for i in $(seq 1 30); do
-            status=$(docker inspect --format='{{.State.Health.Status}}' spring-demo 2>/dev/null || echo "starting")
-            if [ "$status" = "healthy" ]; then
-              echo "Deployment healthy"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Deployment did not become healthy in time" >&2
-          docker logs spring-demo --tail 50
-          exit 1
-
-      - name: Roll back on failed health check
-        if: steps.healthcheck.outcome == 'failure'
-        run: |
-          echo "Rolling back to previous image tag: ${{ steps.previous.outputs.tag }}"
-          IMAGE_TAG=${{ steps.previous.outputs.tag }} docker compose up -d --remove-orphans
-          exit 1
+          kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME"
+          kubectl logs -n "$NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME,app.kubernetes.io/name=$RELEASE_NAME-app" --tail=50 --all-containers || true
